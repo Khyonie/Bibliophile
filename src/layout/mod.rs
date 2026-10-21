@@ -1,7 +1,7 @@
-use std::{cell::RefCell, process::exit, rc::Rc};
+use std::{cell::RefCell, fs, io::Error, path::PathBuf, process::exit, rc::Rc};
 
 use gtk4::{
-    Application, ApplicationWindow, Box, CenterBox, ListBox, Orientation, Paned, ScrolledWindow, gio::prelude::{ApplicationExt, ApplicationExtManual}, glib::{ExitCode, clone::Downgrade, home_dir}, prelude::{BoxExt, GtkWindowExt, ListBoxRowExt},
+    Application, ApplicationWindow, Box, CenterBox, Image, Label, ListBox, ListBoxRow, Orientation, Paned, ScrolledWindow, gio::{AppInfo, AppLaunchContext, File, prelude::{ApplicationExt, ApplicationExtManual, FileExt}}, glib::{ExitCode, clone::Downgrade, home_dir}, prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, WidgetExt},
 };
 
 use crate::{
@@ -22,14 +22,31 @@ pub fn initialize() -> ExitCode {
 }
 
 fn build_layout(application: &Application) {
-    let window = ApplicationWindow::builder()
+    let window = build_window(application);
+    let content = Box::new(Orientation::Vertical, 8);
+    let top_bar = build_top_bar();
+    let entries = build_entry_list();
+    let browser = build_browser(&top_bar, &entries);
+
+    connect_entry_activation(&entries, &browser);
+    initialize_widgets(&top_bar, &entries, &browser);
+
+    content.append(&top_bar.content);
+    content.append(&build_main_content(&entries, &browser));
+    window.set_child(Some(&content));
+    window.present();
+}
+
+fn build_window(application: &Application) -> ApplicationWindow {
+    ApplicationWindow::builder()
         .application(application)
         .title("Bibliophile")
         .default_width(1000)
         .default_height(650)
-        .build();
+        .build()
+}
 
-    let content = Box::new(Orientation::Vertical, 8);
+fn build_top_bar() -> Rc<TopBar> {
     let location_box = Box::new(Orientation::Horizontal, 1);
     let navigation_box = Box::new(Orientation::Horizontal, 8);
 
@@ -39,13 +56,15 @@ fn build_layout(application: &Application) {
         .margin_start(8)
         .margin_end(8)
         .build();
-    let top_bar = Rc::new(TopBar {
+    Rc::new(TopBar {
         content: top_bar,
         location_box,
         navigation_box,
         browser: RefCell::new(std::rc::Weak::new()),
-    });
+    })
+}
 
+fn build_entry_list() -> Rc<EntryList> {
     let entry_box = ListBox::builder()
         .margin_top(8)
         .margin_bottom(8)
@@ -57,15 +76,20 @@ fn build_layout(application: &Application) {
 
     let entries = EntryList{ container: entry_box, entries: RefCell::new(Vec::new()) };
 
-    let entries = Rc::new(entries);
-    let browser = Rc::new(RefCell::new(Browser {
+    Rc::new(entries)
+}
+
+fn build_browser(top_bar: &Rc<TopBar>, entries: &Rc<EntryList>) -> Rc<RefCell<Browser>> {
+    Rc::new(RefCell::new(Browser {
         current_dir: home_dir(),
         last_dirs: Vec::new(),
         next_dirs: Vec::new(),
         entry_list: entries.clone(),
         top_bar: top_bar.clone(),
-    }));
+    }))
+}
 
+fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browser>>) {
     let entries_ref = entries.downgrade();
     let browser_ref  = browser.downgrade();
     entries.container.connect_row_activated(move |_, row| {
@@ -81,27 +105,48 @@ fn build_layout(application: &Application) {
         };
 
         let path = entries_ref.entries.borrow().get(index).cloned();
-        if let Some(path) = path.filter(|path| path.is_dir()) {
-            browser_ref.borrow_mut().move_into(&path);
-        }
-    });
+        if let Some(path) = path {
+            if path.is_dir() {
+                browser_ref.borrow_mut().move_into(&path);
+            } else if path.is_symlink() {
+                let target_path = match path.read_link() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!("Failed to read symlink link: {e}");
+                        return
+                    }
+                };
 
-    if let Err(e) = top_bar.initialize(&browser) {
+                browser_ref.borrow_mut().move_into(&target_path);
+            } else {
+                let file = File::for_path(path).uri();
+
+                if let Err(e) = AppInfo::launch_default_for_uri(&file, None::<&AppLaunchContext>) {
+                    println!("Failed to open file: {e}");
+                };
+            }
+        }
+
+    });
+}
+
+fn initialize_widgets(top_bar: &TopBar, entries: &EntryList, browser: &Rc<RefCell<Browser>>) {
+    if let Err(e) = top_bar.initialize(browser) {
         println!("Failed to build top bar: {e}");
         exit(1)
     };
 
-    if let Err(e) = entries.initialize(&browser) {
+    if let Err(e) = entries.initialize(browser) {
         println!("Failed to build entry box: {e}");
         exit(1)
     };
+}
 
-    content.append(&top_bar.content);
-
+fn build_main_content(entries: &EntryList, browser: &Rc<RefCell<Browser>>) -> Paned {
     // Main body
     let main_content = Paned::builder().hexpand(true).vexpand(true).build();
     main_content.set_position(200);
-    let shortcut_list = ListBox::new();
+    let shortcut_list = build_bookmark_list(browser);
     let shortcut_scroller = ScrolledWindow::builder()
         .vexpand(true)
         .hexpand(true)
@@ -113,10 +158,83 @@ fn build_layout(application: &Application) {
     entry_scroller.set_child(Some(&entries.container));
 
     main_content.set_end_child(Some(&entry_scroller));
-    content.append(&main_content);
+    main_content
+}
 
-    window.set_child(Some(&content));
+fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
+{
+    // TODO Silent error
+    let bookmark_paths = get_bookmarks()
+        .unwrap_or_else(|_| {
+            println!("Failed to read bookmarks file, falling back to empty list");
+            Vec::new()
+        });
 
-    // Finish window
-    window.present();
+    let bookmark_list = ListBox::new();
+
+    for bookmark in bookmark_paths.iter()
+    {
+        let bookmark_entry = ListBoxRow::new();
+        bookmark_entry.set_hexpand(true);
+
+        let bookmark_container = Box::new(Orientation::Horizontal, 12);
+
+        let file_name = bookmark.file_name()
+            .map_or(String::from("(Failed to parse)"), |s| s.to_string_lossy().to_string());
+        
+        // Bookmark icon
+        let icon = match file_name.as_str() {
+            "Downloads" => Image::from_icon_name("folder-download-symbolic"),
+            "Videos" => Image::from_icon_name("folder-videos-symbolic"),
+            "Pictures" => Image::from_icon_name("folder-pictures-symbolic"),
+            "Documents" => Image::from_icon_name("folder-documents-symbolic"),
+            "Music" => Image::from_icon_name("folder-music-symbolic"),
+            _ => Image::from_icon_name("user-bookmarks-symbolic"),
+        };
+        bookmark_container.append(&icon);
+
+        // Bookmark label
+        let label = Label::new(None);
+        label.set_markup(&format!("<b>{file_name}</b>"));
+        label.set_xalign(0.0);
+        bookmark_container.append(&label);
+
+        bookmark_entry.set_child(Some(&bookmark_container));
+
+        bookmark_list.append(&bookmark_entry)
+    }
+
+    connect_bookmark_activation(&bookmark_list, bookmark_paths, browser);
+
+    bookmark_list
+}
+
+fn connect_bookmark_activation(bookmark_list: &ListBox, bookmark_paths: Vec<PathBuf>, browser: &Rc<RefCell<Browser>>)
+{
+    let browser = browser.downgrade();
+    bookmark_list.connect_row_activated(move |_, row| {
+        if let Some(browser) = browser.upgrade()
+        {
+            let index = row.index() as usize;
+            let path = bookmark_paths.get(index)
+                .expect("Attempted to index into non-existent bookmark");
+
+            browser.borrow_mut().move_into(path);
+        }
+    });
+}
+
+fn get_bookmarks() -> Result<Vec<PathBuf>, Error>
+{
+    let target_path = home_dir().join(".config/gtk-3.0/bookmarks");
+    println!("Attempting to read {target_path:?}");
+
+    let lines = fs::read_to_string(target_path)?
+        .replace("file://", "") // Delete protocol headers
+        .split("\n")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+
+    Ok(lines)
 }

@@ -25,6 +25,11 @@ impl Browser {
 
     pub fn move_into(&mut self, path: &Path)
     {
+        // Skip moving if current and destination are the same
+        if self.current_dir == path
+        {
+            return;
+        }
         self.store_current_as_last();
         self.current_dir = path.to_path_buf();
         self.refresh();

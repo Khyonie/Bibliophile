@@ -33,21 +33,25 @@ impl FileEntry {
             |f| f.to_string_lossy().to_string(),
         );
 
-        let file_label = Label::new(Some(&filename));
-        file_label.set_hexpand(true);
-        file_label.set_halign(Align::Start);
-
-        let filetype = self
-            .path
-            .extension()
-            .map_or(String::from("File"), |s| s.to_string_lossy().to_string());
-
-        let filetype_label = Label::new(Some(&filetype));
-
         if self.path.is_symlink() {
             let symlink_path = self.path.read_link()?;
             filename.push_str(&format!(" → {}", symlink_path.to_string_lossy()));
         }
+
+        let file_label = Label::new(Some(&filename));
+        file_label.set_hexpand(true);
+        file_label.set_halign(Align::Start);
+
+        let filetype = if !self.path.is_dir() {
+            self
+                .path
+                .extension()
+                .map_or(String::from("File"), |s| s.to_string_lossy().to_string())
+        } else {
+            String::from("Folder")
+        };
+
+        let filetype_label = Label::new(Some(&filetype));
 
         // Icon
         let icon_name = if self.path.is_dir() {
