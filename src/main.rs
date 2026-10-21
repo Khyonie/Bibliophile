@@ -1,6 +1,6 @@
 mod layout;
+mod model;
 
-fn main()
-{
+fn main() {
     layout::initialize();
 }
