@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, fs::DirEntry, io::Error, path::{Path, PathBuf}, rc::Rc,
-};
+use std::{cell::RefCell, fs::DirEntry, io::Error, path::{Path, PathBuf}, rc::Rc};
 
 use chrono::{DateTime, Utc};
 use gtk4::{
@@ -25,7 +23,7 @@ impl FileEntry {
         }
     }
 
-    pub(crate) fn build_widget(&self) -> Result<Box, Error> {
+    fn filename(&self) -> String {
         let mut filename = self.path.file_stem().map_or(
             self.path
                 .file_name()
@@ -34,10 +32,28 @@ impl FileEntry {
         );
 
         if self.path.is_symlink() {
-            let symlink_path = self.path.read_link()?;
-            filename.push_str(&format!(" → {}", symlink_path.to_string_lossy()));
+            match self.path.read_link() {
+                Ok(target) => filename.push_str(&format!(" → {}", target.to_string_lossy())),
+                Err(_) => filename.push_str(" → (Broken symlink)"),
+            }
         }
 
+        filename
+    }
+
+    fn modified_text(&self) -> String {
+        let modified = self.path.metadata().and_then(|metadata| metadata.modified());
+        modified.map_or_else(
+            |_| String::from("12:00, January 1, 1970"),
+            |time| {
+                let modified: DateTime<Utc> = time.into();
+                modified.format("%H:%M, %B %e, %Y").to_string()
+            },
+        )
+    }
+
+    pub(crate) fn build_widget(&self) -> Result<Box, Error> {
+        let filename = self.filename();
         let file_label = Label::new(Some(&filename));
         file_label.set_hexpand(true);
         file_label.set_halign(Align::Start);
@@ -62,9 +78,8 @@ impl FileEntry {
         let icon = Image::from_icon_name(icon_name);
 
         // Metadata
-        let modified: DateTime<Utc> = self.path.metadata()?.modified()?.into();
-        let modified_label = modified.format("%H:%M, %B %e, %Y").to_string();
-        let modified_label = Label::new(Some(&modified_label));
+        let modified_text = self.modified_text();
+        let modified_label = Label::new(Some(&modified_text));
         modified_label.set_xalign(0.0);
         modified_label.set_width_chars(25);
 
@@ -154,4 +169,26 @@ fn get_entries(path: &Path) -> Result<Vec<DirEntry>, Error>
     });
 
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs;
+
+    use super::FileEntry;
+
+    #[test]
+    pub fn file_entry_handles_broken_symlinks() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target_path = temp_dir.path().join("missing_target");
+        let target_link_path = temp_dir.path().join("broken_symlink");
+        fs::symlink(&target_path, &target_link_path).unwrap();
+
+        let entry = FileEntry::new(&target_link_path);
+        assert_eq!(
+            entry.filename(),
+            format!("broken_symlink → {}", target_path.display())
+        );
+        assert_eq!(entry.modified_text(), "12:00, January 1, 1970");
+    }
 }
