@@ -172,16 +172,13 @@ fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
 
     let bookmark_list = ListBox::new();
 
-    for bookmark in bookmark_paths.iter()
+    for (_, file_name) in bookmark_paths.iter()
     {
         let bookmark_entry = ListBoxRow::new();
         bookmark_entry.set_hexpand(true);
 
         let bookmark_container = Box::new(Orientation::Horizontal, 12);
 
-        let file_name = bookmark.file_name()
-            .map_or(String::from("(Failed to parse)"), |s| s.to_string_lossy().to_string());
-        
         // Bookmark icon
         let icon = match file_name.as_str() {
             "Downloads" => Image::from_icon_name("folder-download-symbolic"),
@@ -195,7 +192,7 @@ fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
 
         // Bookmark label
         let label = Label::new(None);
-        label.set_markup(&format!("<b>{file_name}</b>"));
+        label.set_markup(&format!("<b>{}</b>", gtk4::glib::markup_escape_text(file_name)));
         label.set_xalign(0.0);
         bookmark_container.append(&label);
 
@@ -204,7 +201,7 @@ fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
         bookmark_list.append(&bookmark_entry)
     }
 
-    connect_bookmark_activation(&bookmark_list, bookmark_paths, browser);
+    connect_bookmark_activation(&bookmark_list, bookmark_paths.into_iter().map(|(path, _)| path).collect(), browser);
 
     bookmark_list
 }
@@ -224,16 +221,24 @@ fn connect_bookmark_activation(bookmark_list: &ListBox, bookmark_paths: Vec<Path
     });
 }
 
-fn get_bookmarks() -> Result<Vec<PathBuf>, Error>
+fn get_bookmarks() -> Result<Vec<(PathBuf, String)>, Error>
 {
     let target_path = home_dir().join(".config/gtk-3.0/bookmarks");
     println!("Attempting to read {target_path:?}");
 
     let lines = fs::read_to_string(target_path)?
-        .replace("file://", "") // Delete protocol headers
         .split("\n")
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .map(|line| {
+            let (uri, label) = line.split_once(' ').unwrap_or((line, ""));
+            let path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri));
+            let name = if label.is_empty() {
+                path.file_name().map_or(String::from("(Failed to parse)"), |s| s.to_string_lossy().to_string())
+            } else {
+                label.to_string()
+            };
+            (path, name)
+        })
         .collect();
 
     Ok(lines)
