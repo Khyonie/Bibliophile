@@ -1,15 +1,22 @@
-use std::{cell::RefCell, fs, io::Error, path::PathBuf, process::exit, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, process::exit, rc::Rc};
 
 use gtk4::{
-    Application, ApplicationWindow, Box, CenterBox, Image, Label, ListBox, ListBoxRow, Orientation, Paned, ScrolledWindow, gio::{AppInfo, AppLaunchContext, File, prelude::{ApplicationExt, ApplicationExtManual, FileExt}}, glib::{ExitCode, clone::Downgrade, home_dir}, prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, WidgetExt},
+    Application, ApplicationWindow, Box, CenterBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, Paned, PopoverMenu, ScrolledWindow, gdk::{self, Rectangle}, gio::{
+        AppInfo, AppLaunchContext, File, Menu,
+        prelude::{ApplicationExt, ApplicationExtManual, FileExt},
+    }, glib::{ExitCode, clone::Downgrade, home_dir}, graphene::Point, prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, PopoverExt, WidgetExt},
 };
 
 use crate::{
-    layout::{entry::EntryList, topbar::TopBar}, model::Browser,
+    layout::{entry::EntryList, topbar::TopBar},
+    model::Browser,
 };
 
+mod bookmarks_fs;
 pub mod entry;
 pub mod topbar;
+
+use self::bookmarks_fs::get_bookmarks;
 
 pub fn initialize() -> ExitCode {
     let app = Application::builder()
@@ -74,7 +81,10 @@ fn build_entry_list() -> Rc<EntryList> {
 
     entry_box.set_activate_on_single_click(false);
 
-    let entries = EntryList{ container: entry_box, entries: RefCell::new(Vec::new()) };
+    let entries = EntryList {
+        container: entry_box,
+        entries: RefCell::new(Vec::new()),
+    };
 
     Rc::new(entries)
 }
@@ -91,7 +101,7 @@ fn build_browser(top_bar: &Rc<TopBar>, entries: &Rc<EntryList>) -> Rc<RefCell<Br
 
 fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browser>>) {
     let entries_ref = entries.downgrade();
-    let browser_ref  = browser.downgrade();
+    let browser_ref = browser.downgrade();
     entries.container.connect_row_activated(move |_, row| {
         // What is this black magic?
         let (Some(browser_ref), Some(entries_ref)) = (browser_ref.upgrade(), entries_ref.upgrade())
@@ -100,7 +110,10 @@ fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browse
         };
 
         // The first two rows are the header and separator
-        let Some(index) = usize::try_from(row.index()).ok().and_then(|index| index.checked_sub(2)) else {
+        let Some(index) = usize::try_from(row.index())
+            .ok()
+            .and_then(|index| index.checked_sub(2))
+        else {
             return;
         };
 
@@ -113,7 +126,7 @@ fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browse
                     Ok(p) => p,
                     Err(e) => {
                         println!("Failed to read symlink link: {e}");
-                        return
+                        return;
                     }
                 };
 
@@ -126,10 +139,32 @@ fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browse
                 };
             }
         }
-
     });
-}
 
+    let right_click_ref = entries.downgrade();
+
+    let gesture = GestureClick::builder()
+        .button(gdk::BUTTON_SECONDARY)
+        .build();
+
+    gesture.connect_pressed(move |_gesture, presses, x, y| {
+        let Some(list_box) = right_click_ref.upgrade() else {
+            return
+        };
+
+        if presses == 1 && let Some(row) = list_box.container.row_at_y(y as i32)
+        {
+            if row.index() < 2
+            {
+                return
+            }
+
+            handle_row_right_click(list_box, row.index() - 2, x, y);
+        }
+    });
+
+    entries.container.add_controller(gesture);
+}
 fn initialize_widgets(top_bar: &TopBar, entries: &EntryList, browser: &Rc<RefCell<Browser>>) {
     if let Err(e) = top_bar.initialize(browser) {
         println!("Failed to build top bar: {e}");
@@ -151,6 +186,7 @@ fn build_main_content(entries: &EntryList, browser: &Rc<RefCell<Browser>>) -> Pa
         .vexpand(true)
         .hexpand(true)
         .build();
+
     shortcut_scroller.set_child(Some(&shortcut_list));
     main_content.set_start_child(Some(&shortcut_scroller));
 
@@ -161,19 +197,16 @@ fn build_main_content(entries: &EntryList, browser: &Rc<RefCell<Browser>>) -> Pa
     main_content
 }
 
-fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
-{
+fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox {
     // TODO Silent error
-    let bookmark_paths = get_bookmarks()
-        .unwrap_or_else(|_| {
-            println!("Failed to read bookmarks file, falling back to empty list");
-            Vec::new()
-        });
+    let bookmark_paths = get_bookmarks().unwrap_or_else(|_| {
+        println!("Failed to read bookmarks file, falling back to empty list");
+        Vec::new()
+    });
 
     let bookmark_list = ListBox::new();
 
-    for (_, file_name) in bookmark_paths.iter()
-    {
+    for (_, file_name) in bookmark_paths.iter() {
         let bookmark_entry = ListBoxRow::new();
         bookmark_entry.set_hexpand(true);
 
@@ -192,7 +225,10 @@ fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
 
         // Bookmark label
         let label = Label::new(None);
-        label.set_markup(&format!("<b>{}</b>", gtk4::glib::markup_escape_text(file_name)));
+        label.set_markup(&format!(
+            "<b>{}</b>",
+            gtk4::glib::markup_escape_text(file_name)
+        ));
         label.set_xalign(0.0);
         bookmark_container.append(&label);
 
@@ -201,19 +237,26 @@ fn build_bookmark_list(browser: &Rc<RefCell<Browser>>) -> ListBox
         bookmark_list.append(&bookmark_entry)
     }
 
-    connect_bookmark_activation(&bookmark_list, bookmark_paths.into_iter().map(|(path, _)| path).collect(), browser);
+    connect_bookmark_activation(
+        &bookmark_list,
+        bookmark_paths.into_iter().map(|(path, _)| path).collect(),
+        browser,
+    );
 
     bookmark_list
 }
 
-fn connect_bookmark_activation(bookmark_list: &ListBox, bookmark_paths: Vec<PathBuf>, browser: &Rc<RefCell<Browser>>)
-{
+fn connect_bookmark_activation(
+    bookmark_list: &ListBox,
+    bookmark_paths: Vec<PathBuf>,
+    browser: &Rc<RefCell<Browser>>,
+) {
     let browser = browser.downgrade();
     bookmark_list.connect_row_activated(move |_, row| {
-        if let Some(browser) = browser.upgrade()
-        {
+        if let Some(browser) = browser.upgrade() {
             let index = row.index() as usize;
-            let path = bookmark_paths.get(index)
+            let path = bookmark_paths
+                .get(index)
                 .expect("Attempted to index into non-existent bookmark");
 
             browser.borrow_mut().move_into(path);
@@ -221,25 +264,39 @@ fn connect_bookmark_activation(bookmark_list: &ListBox, bookmark_paths: Vec<Path
     });
 }
 
-fn get_bookmarks() -> Result<Vec<(PathBuf, String)>, Error>
+fn handle_row_right_click(entries: Rc<EntryList>, index: i32, x: f64, y: f64)
 {
-    let target_path = home_dir().join(".config/gtk-3.0/bookmarks");
-    println!("Attempting to read {target_path:?}");
+    let row = entries.container.row_at_index(index + 2)
+        .expect("Recieved non-existent row");
 
-    let lines = fs::read_to_string(target_path)?
-        .split("\n")
-        .filter(|s| !s.is_empty())
-        .map(|line| {
-            let (uri, label) = line.split_once(' ').unwrap_or((line, ""));
-            let path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri));
-            let name = if label.is_empty() {
-                path.file_name().map_or(String::from("(Failed to parse)"), |s| s.to_string_lossy().to_string())
-            } else {
-                label.to_string()
-            };
-            (path, name)
-        })
-        .collect();
+    let Some(point) = entries.container.compute_point(&row, &Point::new(x as f32, y as f32)) else {
+        return;
+    };
+    let position = Rectangle::new(point.x() as i32, point.y() as i32, 1, 1);
 
-    Ok(lines)
+    // Build a popup
+    let menu = Menu::new();
+
+    let open_section = Menu::new();
+    for label in ["Open", "Open with", "Tag"] {
+        open_section.append(Some(label), None);
+    }
+    menu.append_section(None, &open_section);
+
+    let copy_section = Menu::new();
+    copy_section.append(Some("Copy"), None);
+    menu.append_section(None, &copy_section);
+
+    let edit_section = Menu::new();
+    for label in ["Rename", "Move to trash", "Properties"] {
+        edit_section.append(Some(label), None);
+    }
+    menu.append_section(None, &edit_section);
+
+    let popup = PopoverMenu::from_model(Some(&menu));
+    popup.set_pointing_to(Some(&position));
+    popup.set_parent(&row);
+
+    // Present
+    popup.popup();
 }

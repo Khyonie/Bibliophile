@@ -1,4 +1,7 @@
-use std::{path::{Path, PathBuf}, rc::Rc};
+use std::{
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use crate::layout::{entry::EntryList, topbar::TopBar};
 
@@ -23,11 +26,9 @@ impl Browser {
         }
     }
 
-    pub fn move_into(&mut self, path: &Path)
-    {
+    pub fn move_into(&mut self, path: &Path) {
         // Skip moving if current and destination are the same
-        if self.current_dir == path
-        {
+        if self.current_dir == path {
             return;
         }
         self.store_current_as_last();
