@@ -189,7 +189,7 @@ fn normalize_escape_characters(name: &str) -> String
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs;
+    use std::{os::unix::fs, path::PathBuf};
 
     use super::FileEntry;
 
@@ -206,5 +206,13 @@ mod tests {
             format!("broken_symlink → {}", target_path.display())
         );
         assert_eq!(entry.modified_text(), "12:00, January 1, 1970");
+    }
+
+    #[test]
+    pub fn file_entry_replaces_control_characters() {
+        let file = PathBuf::from("/tmp/\r");
+        let entry = FileEntry::new(&file);
+
+        assert_eq!(&entry.filename().0, "�")
     }
 }
