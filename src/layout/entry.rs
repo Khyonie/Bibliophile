@@ -23,13 +23,16 @@ impl FileEntry {
         }
     }
 
-    fn filename(&self) -> String {
+    fn filename(&self) -> (String, bool) {
         let mut filename = self.path.file_stem().map_or(
             self.path
                 .file_name()
                 .map_or(String::from("Unnamed"), |f| f.to_string_lossy().to_string()),
             |f| f.to_string_lossy().to_string(),
         );
+
+        let has_control = filename.chars().any(|c| c.is_control());
+        filename = normalize_escape_characters(&filename);
 
         if self.path.is_symlink() {
             match self.path.read_link() {
@@ -38,7 +41,7 @@ impl FileEntry {
             }
         }
 
-        filename
+        (filename, has_control)
     }
 
     fn modified_text(&self) -> String {
@@ -53,8 +56,14 @@ impl FileEntry {
     }
 
     pub(crate) fn build_widget(&self) -> Result<Box, Error> {
-        let filename = self.filename();
-        let file_label = Label::new(Some(&filename));
+        let (filename, has_control) = self.filename();
+        let file_label = Label::new(None);
+        if has_control {
+            file_label.set_markup(&format!("<i>{filename}</i>"));
+        } else {
+            file_label.set_text(&filename);
+        }
+
         file_label.set_hexpand(true);
         file_label.set_halign(Align::Start);
 
@@ -171,6 +180,13 @@ fn get_entries(path: &Path) -> Result<Vec<DirEntry>, Error>
     Ok(files)
 }
 
+fn normalize_escape_characters(name: &str) -> String
+{
+    name.chars()
+        .map(|c| if c.is_control() { String::from("�") } else { c.to_string() })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs;
@@ -186,7 +202,7 @@ mod tests {
 
         let entry = FileEntry::new(&target_link_path);
         assert_eq!(
-            entry.filename(),
+            entry.filename().0,
             format!("broken_symlink → {}", target_path.display())
         );
         assert_eq!(entry.modified_text(), "12:00, January 1, 1970");
