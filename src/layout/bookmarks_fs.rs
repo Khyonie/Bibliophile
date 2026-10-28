@@ -4,7 +4,6 @@ use gtk4::glib::home_dir;
 
 pub(super) fn get_bookmarks() -> Result<Vec<(PathBuf, String)>, Error> {
     let target_path = home_dir().join(".config/gtk-3.0/bookmarks");
-    println!("Attempting to read {target_path:?}");
 
     let lines = fs::read_to_string(target_path)?
         .split("\n")

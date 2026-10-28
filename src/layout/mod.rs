@@ -1,19 +1,26 @@
 use std::{cell::RefCell, path::PathBuf, process::exit, rc::Rc};
 
 use gtk4::{
-    Application, ApplicationWindow, Box, CenterBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, Paned, PopoverMenu, ScrolledWindow, gdk::{self, Rectangle}, gio::{
-        AppInfo, AppLaunchContext, File, Menu,
-        prelude::{ApplicationExt, ApplicationExtManual, FileExt},
-    }, glib::{ExitCode, clone::Downgrade, home_dir}, graphene::Point, prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, PopoverExt, WidgetExt},
+    Application, ApplicationWindow, Box, CenterBox, GestureClick, Image, Label, ListBox,
+    ListBoxRow, Orientation, Paned, PopoverMenu, ScrolledWindow,
+    gdk::{self, Rectangle},
+    gio::{
+        AppInfo, AppLaunchContext, File, Menu, SimpleAction, SimpleActionGroup,
+        prelude::{ActionMapExt, ApplicationExt, ApplicationExtManual, FileExt},
+    },
+    glib::{ExitCode, clone::Downgrade, home_dir},
+    graphene::Point,
+    prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, PopoverExt, WidgetExt},
 };
+use rusqlite::Connection;
 
 use crate::{
-    layout::{entry::EntryList, topbar::TopBar},
-    model::Browser,
+    db, layout::{entry::EntryList, topbar::TopBar}, model::Browser,
 };
 
 mod bookmarks_fs;
 pub mod entry;
+pub mod tag;
 pub mod topbar;
 
 use self::bookmarks_fs::get_bookmarks;
@@ -29,11 +36,16 @@ pub fn initialize() -> ExitCode {
 }
 
 fn build_layout(application: &Application) {
+    let Ok(database) = db::open() else {
+        println!("Failed to open database");
+        exit(1)
+    };
+
     let window = build_window(application);
     let content = Box::new(Orientation::Vertical, 8);
     let top_bar = build_top_bar();
     let entries = build_entry_list();
-    let browser = build_browser(&top_bar, &entries);
+    let browser = build_browser(&top_bar, &entries, database);
 
     connect_entry_activation(&entries, &browser);
     initialize_widgets(&top_bar, &entries, &browser);
@@ -89,13 +101,14 @@ fn build_entry_list() -> Rc<EntryList> {
     Rc::new(entries)
 }
 
-fn build_browser(top_bar: &Rc<TopBar>, entries: &Rc<EntryList>) -> Rc<RefCell<Browser>> {
+fn build_browser(top_bar: &Rc<TopBar>, entries: &Rc<EntryList>, database: Connection) -> Rc<RefCell<Browser>> {
     Rc::new(RefCell::new(Browser {
         current_dir: home_dir(),
         last_dirs: Vec::new(),
         next_dirs: Vec::new(),
         entry_list: entries.clone(),
         top_bar: top_bar.clone(),
+        database
     }))
 }
 
@@ -142,24 +155,25 @@ fn connect_entry_activation(entries: &Rc<EntryList>, browser: &Rc<RefCell<Browse
     });
 
     let right_click_ref = entries.downgrade();
+    let right_click_browser = browser.downgrade();
 
     let gesture = GestureClick::builder()
         .button(gdk::BUTTON_SECONDARY)
         .build();
 
     gesture.connect_pressed(move |_gesture, presses, x, y| {
-        let Some(list_box) = right_click_ref.upgrade() else {
-            return
+        let (Some(list_box), Some(browser)) = (right_click_ref.upgrade(), right_click_browser.upgrade()) else {
+            return;
         };
 
-        if presses == 1 && let Some(row) = list_box.container.row_at_y(y as i32)
+        if presses == 1
+            && let Some(row) = list_box.container.row_at_y(y as i32)
         {
-            if row.index() < 2
-            {
-                return
+            if row.index() < 2 {
+                return;
             }
 
-            handle_row_right_click(list_box, row.index() - 2, x, y);
+            handle_row_right_click(browser, row.index() - 2, x, y);
         }
     });
 
@@ -264,12 +278,20 @@ fn connect_bookmark_activation(
     });
 }
 
-fn handle_row_right_click(entries: Rc<EntryList>, index: i32, x: f64, y: f64)
-{
-    let row = entries.container.row_at_index(index + 2)
+fn handle_row_right_click(browser: Rc<RefCell<Browser>>, index: i32, x: f64, y: f64) {
+    let entries = browser.borrow().entry_list.clone();
+    let row = entries
+        .container
+        .row_at_index(index + 2)
         .expect("Recieved non-existent row");
+    let Some(path) = entries.entries.borrow().get(index as usize).cloned() else {
+        return;
+    };
 
-    let Some(point) = entries.container.compute_point(&row, &Point::new(x as f32, y as f32)) else {
+    let Some(point) = entries
+        .container
+        .compute_point(&row, &Point::new(x as f32, y as f32))
+    else {
         return;
     };
     let position = Rectangle::new(point.x() as i32, point.y() as i32, 1, 1);
@@ -278,9 +300,10 @@ fn handle_row_right_click(entries: Rc<EntryList>, index: i32, x: f64, y: f64)
     let menu = Menu::new();
 
     let open_section = Menu::new();
-    for label in ["Open", "Open with", "Tag"] {
+    for label in ["Open", "Open with"] {
         open_section.append(Some(label), None);
     }
+    open_section.append(Some("Tag"), Some("entry.tag"));
     menu.append_section(None, &open_section);
 
     let copy_section = Menu::new();
@@ -294,6 +317,16 @@ fn handle_row_right_click(entries: Rc<EntryList>, index: i32, x: f64, y: f64)
     menu.append_section(None, &edit_section);
 
     let popup = PopoverMenu::from_model(Some(&menu));
+    let tag_action = SimpleAction::new("tag", None);
+    let browser = Rc::downgrade(&browser);
+    tag_action.connect_activate(move |_, _| {
+        if let Some(browser) = browser.upgrade() {
+            tag::create_tag_popup(&path, &browser.borrow());
+        }
+    });
+    let actions = SimpleActionGroup::new();
+    actions.add_action(&tag_action);
+    popup.insert_action_group("entry", Some(&actions));
     popup.set_pointing_to(Some(&position));
     popup.set_parent(&row);
 

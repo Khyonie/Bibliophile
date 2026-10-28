@@ -79,7 +79,6 @@ impl EntryList {
     }
 
     pub fn rebuild(&self, path: &Path) -> Result<(), Error> {
-        println!("Rebuilding view");
         self.clear();
         self.build(path)
     }

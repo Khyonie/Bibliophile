@@ -3,6 +3,8 @@ use std::{
     rc::Rc,
 };
 
+use rusqlite::Connection;
+
 use crate::layout::{entry::EntryList, topbar::TopBar};
 
 const MAX_STORED_DIRS: usize = 20;
@@ -13,6 +15,7 @@ pub struct Browser {
     pub next_dirs: Vec<PathBuf>,
     pub entry_list: Rc<EntryList>,
     pub top_bar: Rc<TopBar>,
+    pub database: Connection
 }
 
 impl Browser {
