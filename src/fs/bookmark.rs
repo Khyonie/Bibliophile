@@ -2,7 +2,7 @@ use std::{fs, io::Error, path::PathBuf};
 
 use gtk4::glib::home_dir;
 
-pub(super) fn get_bookmarks() -> Result<Vec<(PathBuf, String)>, Error> {
+pub(crate) fn get_bookmarks() -> Result<Vec<(PathBuf, String)>, Error> {
     let target_path = home_dir().join(".config/gtk-3.0/bookmarks");
 
     let lines = fs::read_to_string(target_path)?

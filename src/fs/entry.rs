@@ -2,7 +2,7 @@ use std::{fs::DirEntry, io::Error, path::Path};
 
 use chrono::{DateTime, Utc};
 
-use super::FileEntry;
+use crate::ui::entry::FileEntry;
 
 impl FileEntry {
     pub fn new(path: &Path) -> Self {
@@ -11,7 +11,10 @@ impl FileEntry {
         }
     }
 
-    pub(super) fn filename(&self) -> (String, bool) {
+    /// Gets the filename of the file this entry represents, and if the file has any control
+    /// characters.
+    /// Symlinks are formatted as "Name → /path/to/target"
+    pub(crate) fn filename(&self) -> (String, bool) {
         let mut filename = self.path.file_stem().map_or(
             self.path
                 .file_name()
@@ -32,7 +35,7 @@ impl FileEntry {
         (filename, has_control)
     }
 
-    pub(super) fn modified_text(&self) -> String {
+    pub(crate) fn modified_text(&self) -> String {
         let modified = self
             .path
             .metadata()
@@ -47,7 +50,8 @@ impl FileEntry {
     }
 }
 
-pub(super) fn get_entries(path: &Path) -> Result<Vec<DirEntry>, Error> {
+/// Gets and sorts entries the a given path
+pub(crate) fn get_entries(path: &Path) -> Result<Vec<DirEntry>, Error> {
     let mut files: Vec<DirEntry> = path.read_dir()?.filter_map(|e| e.ok()).collect();
 
     // Sort by directories, then by name
@@ -60,15 +64,10 @@ pub(super) fn get_entries(path: &Path) -> Result<Vec<DirEntry>, Error> {
     Ok(files)
 }
 
+/// Replaces un-displayable control characters with the unicode replacement character
 fn normalize_escape_characters(name: &str) -> String {
     name.chars()
-        .map(|c| {
-            if c.is_control() {
-                String::from("�")
-            } else {
-                c.to_string()
-            }
-        })
+        .map(|c| if c.is_control() { '�' } else { c })
         .collect()
 }
 

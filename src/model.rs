@@ -5,7 +5,7 @@ use std::{
 
 use rusqlite::Connection;
 
-use crate::layout::{entry::EntryList, topbar::TopBar};
+use crate::ui::{entry::EntryList, topbar::TopBar};
 
 const MAX_STORED_DIRS: usize = 20;
 

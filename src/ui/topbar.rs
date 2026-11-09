@@ -85,6 +85,7 @@ impl TopBar {
         let forward_button = Button::from_icon_name("go-next-symbolic");
         let up_button = Button::from_icon_name("go-up-symbolic");
         let refresh_button = Button::from_icon_name("view-refresh-symbolic");
+        let tags_button = Button::from_icon_name("tag-symbolic");
 
         // Actions
         let refresh_browser = browser.clone();
@@ -99,10 +100,14 @@ impl TopBar {
         let next_browser = browser.clone();
         forward_button.connect_clicked(move |_| next_browser.borrow_mut().next());
 
+        let manage_browser = browser.clone();
+        tags_button.connect_clicked(move |_| ());
+
         // Placement
         self.navigation_box.append(&back_button);
         self.navigation_box.append(&forward_button);
         self.navigation_box.append(&up_button);
         self.navigation_box.append(&refresh_button);
+        self.navigation_box.append(&tags_button);
     }
 }

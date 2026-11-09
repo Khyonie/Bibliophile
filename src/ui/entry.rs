@@ -10,11 +10,7 @@ use gtk4::{
     prelude::{BoxExt, ListBoxRowExt, WidgetExt},
 };
 
-use crate::model::Browser;
-
-mod fs;
-
-use self::fs::get_entries;
+use crate::{fs::entry::get_entries, model::Browser};
 
 pub struct EntryList {
     pub container: ListBox,

@@ -62,11 +62,16 @@ fn initialize_db(connection: &Connection) -> Result<(), Error> {
         (),
     )?;
 
-    Tag::new_tag("Invoices", "#FF0000", connection)?;
-    Tag::new_tag("Fish", "#00FFFF", connection)?;
+    Tag::new_tag("Invoices", "#ff8282", connection)?;
+    Tag::new_tag("Fish", "#82beff", connection)?;
     Tag::new_tag("Drugs", "#FFFFFF", connection)?;
-    Tag::new_tag("Yellow", "#FFFF00", connection)?;
-    Tag::new_tag("Green", "#0000FF", connection)?;
+    Tag::new_tag("Yellow", "#ffee82", connection)?;
+    Tag::new_tag("Green", "#8fff82", connection)?;
+    Tag::new_tag("Final Fantasy", "#82fffd", connection)?;
+    Tag::new_tag("Minecraft", "#8fff82", connection)?;
+    Tag::new_tag("Blender", "#ffc982", connection)?;
+    Tag::new_tag("Java Libraries", "#ff9f82", connection)?;
+    Tag::new_tag("Trans Stuff", "#ff82f3", connection)?;
 
     println!("Initialized database");
     Ok(())

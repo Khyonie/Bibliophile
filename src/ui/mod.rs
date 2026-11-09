@@ -1,29 +1,26 @@
 use std::{cell::RefCell, path::PathBuf, process::exit, rc::Rc};
 
 use gtk4::{
-    Application, ApplicationWindow, Box, CenterBox, GestureClick, Image, Label, ListBox,
-    ListBoxRow, Orientation, Paned, PopoverMenu, ScrolledWindow,
+    Application, ApplicationWindow, Box, Button, CenterBox, GestureClick, Image, Label, ListBox,
+    ListBoxRow, Orientation, Paned, Popover, ScrolledWindow, Separator, Stack, StackTransitionType,
     gdk::{self, Rectangle},
     gio::{
-        AppInfo, AppLaunchContext, File, Menu, SimpleAction, SimpleActionGroup,
-        prelude::{ActionMapExt, ApplicationExt, ApplicationExtManual, FileExt},
+        AppInfo, AppLaunchContext, File,
+        prelude::{ApplicationExt, ApplicationExtManual, FileExt},
     },
     glib::{ExitCode, clone::Downgrade, home_dir},
     graphene::Point,
-    prelude::{BoxExt, GtkWindowExt, ListBoxRowExt, PopoverExt, WidgetExt},
+    prelude::{BoxExt, ButtonExt, GtkWindowExt, ListBoxRowExt, PopoverExt, WidgetExt},
 };
 use rusqlite::Connection;
 
 use crate::{
-    db, layout::{entry::EntryList, topbar::TopBar}, model::Browser,
+    db, fs::bookmark::get_bookmarks, model::Browser, ui::{entry::EntryList, topbar::TopBar},
 };
 
-mod bookmarks_fs;
 pub mod entry;
-pub mod tag;
 pub mod topbar;
-
-use self::bookmarks_fs::get_bookmarks;
+pub mod tag;
 
 pub fn initialize() -> ExitCode {
     let app = Application::builder()
@@ -296,40 +293,77 @@ fn handle_row_right_click(browser: Rc<RefCell<Browser>>, index: i32, x: f64, y: 
     };
     let position = Rectangle::new(point.x() as i32, point.y() as i32, 1, 1);
 
-    // Build a popup
-    let menu = Menu::new();
+    let stack = Stack::new();
+    stack.set_hhomogeneous(false);
+    stack.set_vhomogeneous(false);
+    stack.set_interpolate_size(true);
+    stack.set_transition_type(StackTransitionType::SlideLeftRight);
 
-    let open_section = Menu::new();
+    let menu_page = Box::new(Orientation::Vertical, 0);
+    menu_page.set_width_request(180);
     for label in ["Open", "Open with"] {
-        open_section.append(Some(label), None);
+        let button = context_menu_button(label);
+        button.set_sensitive(false);
+        menu_page.append(&button);
     }
-    open_section.append(Some("Tag"), Some("entry.tag"));
-    menu.append_section(None, &open_section);
+    match tag::create_tag_menu(&path, &browser) {
+        Ok(tag_content) => {
+            let tag_button = context_menu_button("Tag ›");
+            let tag_stack = stack.downgrade();
+            tag_button.connect_clicked(move |_| {
+                if let Some(stack) = tag_stack.upgrade() {
+                    stack.set_visible_child_name("tags");
+                }
+            });
+            menu_page.append(&tag_button);
 
-    let copy_section = Menu::new();
-    copy_section.append(Some("Copy"), None);
-    menu.append_section(None, &copy_section);
-
-    let edit_section = Menu::new();
-    for label in ["Rename", "Move to trash", "Properties"] {
-        edit_section.append(Some(label), None);
-    }
-    menu.append_section(None, &edit_section);
-
-    let popup = PopoverMenu::from_model(Some(&menu));
-    let tag_action = SimpleAction::new("tag", None);
-    let browser = Rc::downgrade(&browser);
-    tag_action.connect_activate(move |_, _| {
-        if let Some(browser) = browser.upgrade() {
-            tag::create_tag_popup(&path, &browser.borrow());
+            let tag_page = Box::new(Orientation::Vertical, 0);
+            tag_page.set_size_request(440, 480);
+            let back_button = context_menu_button("‹ Back");
+            let main_stack = stack.downgrade();
+            back_button.connect_clicked(move |_| {
+                if let Some(stack) = main_stack.upgrade() {
+                    stack.set_visible_child_name("main");
+                }
+            });
+            tag_page.append(&back_button);
+            tag_page.append(&tag_content);
+            stack.add_named(&tag_page, Some("tags"));
         }
-    });
-    let actions = SimpleActionGroup::new();
-    actions.add_action(&tag_action);
-    popup.insert_action_group("entry", Some(&actions));
+        Err(error) => {
+            eprintln!("Failed to load tags: {error}");
+        }
+    }
+    menu_page.append(&Separator::new(Orientation::Horizontal));
+    let copy_button = context_menu_button("Copy");
+    copy_button.set_sensitive(false);
+    menu_page.append(&copy_button);
+    menu_page.append(&Separator::new(Orientation::Horizontal));
+    for label in ["Rename", "Move to trash", "Properties"] {
+        let button = context_menu_button(label);
+        button.set_sensitive(false);
+        menu_page.append(&button);
+    }
+    stack.add_named(&menu_page, Some("main"));
+    stack.set_visible_child_name("main");
+
+    let popup = Popover::new();
+    popup.add_css_class("menu");
+    popup.set_child(Some(&stack));
     popup.set_pointing_to(Some(&position));
     popup.set_parent(&row);
+    popup.connect_closed(|popup| popup.unparent());
 
     // Present
     popup.popup();
+}
+
+fn context_menu_button(text: &str) -> Button {
+    let button = Button::new();
+    button.add_css_class("flat");
+    let label = Label::new(Some(text));
+    label.set_hexpand(true);
+    label.set_xalign(0.0);
+    button.set_child(Some(&label));
+    button
 }
